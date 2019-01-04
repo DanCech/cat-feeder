@@ -99,6 +99,53 @@ void setup() {
 
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
+
+  Serial1.begin(115200);
+
+  initScreen();
+}
+
+void initScreen() {
+  Serial1.write(0x7c);
+  Serial1.write((byte)0);
+
+  Serial1.print("Cat Feeder 0.1");
+
+  updateTotalFed();
+}
+
+void setX(byte posX) // 0-127 or 0-159 pixels
+{
+  // Set the X position
+  Serial1.write(0x7C);
+  Serial1.write(0x18);// CTRL x
+  Serial1.write(posX);
+}
+
+void setY(byte posY) // 0-63 or 0-127 pixels
+{
+  // Set the Y position
+  Serial1.write(0x7C);
+  Serial1.write(0x19);// CTRL y
+  Serial1.write(posY);
+}
+
+void updateTotalFed() {
+  setX(0);
+  setY(52);
+  Serial1.print("Total Fed: ");
+  Serial1.print(totalFed);
+  Serial1.print("   ");
+}
+
+void updateFeeding(boolean feeding) {
+  setX(0);
+  setY(40);
+  if (feeding) {
+    Serial1.print("Feeding...");
+  } else {
+    Serial1.print("          ");
+  }
 }
 
 void loop() {
@@ -242,6 +289,8 @@ void feed(int numToFeed) {
   int prevState = HIGH;
   int currState;
 
+  updateFeeding(true);
+
   Serial.print("Feeding ");
   Serial.print(numToFeed);
   Serial.println();
@@ -255,6 +304,8 @@ void feed(int numToFeed) {
     if (currState == HIGH && prevState == LOW) {
       totalFed++;
       numSegments++;
+
+      updateTotalFed();
     }
 
     /*
@@ -276,6 +327,8 @@ void feed(int numToFeed) {
   }
 
   digitalWrite(outputPin, LOW);
+
+  updateFeeding(false);
 
   Serial.print("Fed ");
   Serial.print(numSegments);
