@@ -1,5 +1,7 @@
 #include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
 #include <PubSubClient.h>
+#include <NTPClient.h>
 #include "config.h"
 
 // Set web server port number to 80
@@ -10,6 +12,7 @@ String header;
 
 int totalFed = 0;
 int toFeed = 0;
+unsigned long lastFed = 0;
 
 const byte numChars = 32;
 char receivedChars[numChars]; // an array to store the received data
@@ -18,6 +21,9 @@ boolean newData = false;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP);
 
 void publish(const char* topic, const char* msg) {
   client.publish(String(String(topic_base) + topic).c_str(), msg);
@@ -72,12 +78,16 @@ void setup() {
   pinMode(outputPin, OUTPUT);
   digitalWrite(outputPin, LOW);
 
-  Serial.begin(74880);
-
   delay(100);
 
-  Serial.println("Cat Feeder");
+  Serial.begin(74880);
+
+  Serial.println("Cat Feeder 0.1");
   Serial.println();
+
+  Serial1.begin(115200);
+
+  initScreen();
 
   // Connect to Wi-Fi network with SSID and password
   Serial.print("Connecting to ");
@@ -95,14 +105,19 @@ void setup() {
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
 
+  // Initialize a NTPClient to get time
+  timeClient.begin();
+  // Set offset time in seconds to adjust for your timezone, for example:
+  // GMT +1 = 3600
+  // GMT +8 = 28800
+  // GMT -1 = -3600
+  // GMT 0 = 0
+  timeClient.setTimeOffset(-5 * 3600);
+
   server.begin();
 
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
-
-  Serial1.begin(115200);
-
-  initScreen();
 }
 
 void initScreen() {
@@ -112,6 +127,7 @@ void initScreen() {
   Serial1.print("Cat Feeder 0.1");
 
   updateTotalFed();
+  updateLastFed();
 }
 
 void setX(byte posX) // 0-127 or 0-159 pixels
@@ -138,9 +154,20 @@ void updateTotalFed() {
   Serial1.print("   ");
 }
 
-void updateFeeding(boolean feeding) {
+void updateLastFed() {
   setX(0);
   setY(40);
+  Serial1.print("Last Fed:  ");
+  if (lastFed > 0) {
+    Serial1.print(lastFed);
+  } else {
+    Serial1.print("Not Fed          ");
+  }
+}
+
+void updateFeeding(boolean feeding) {
+  setX(0);
+  setY(28);
   if (feeding) {
     Serial1.print("Feeding...");
   } else {
@@ -176,6 +203,10 @@ void loop() {
   }
 
   client.loop();
+
+  while(!timeClient.update()) {
+    timeClient.forceUpdate();
+  }
 
   if (toFeed > 0) {
     feed(toFeed);
@@ -329,6 +360,9 @@ void feed(int numToFeed) {
   digitalWrite(outputPin, LOW);
 
   updateFeeding(false);
+
+  lastFed = timeClient.getEpochTime();
+  updateLastFed();
 
   Serial.print("Fed ");
   Serial.print(numSegments);
