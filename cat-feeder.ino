@@ -3,6 +3,8 @@
 #include <PubSubClient.h>
 #include <NTPClient.h>
 #include "config.h"
+#include <AltSerialGraphicLCD.h>
+#include <SoftwareSerial.h>
 
 // Set web server port number to 80
 WiFiServer server(80);
@@ -13,6 +15,8 @@ String header;
 int totalFed = 0;
 int toFeed = 0;
 unsigned long lastFed = 0;
+unsigned long timeUpdated = 0;
+unsigned long lastScreenInit = 0;
 
 const byte numChars = 32;
 char receivedChars[numChars]; // an array to store the received data
@@ -24,6 +28,19 @@ PubSubClient client(espClient);
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
+
+#define SERIAL_TX_DPIN   D1
+#define SERIAL_RX_DPIN   D2
+
+// Initialize an instance of the SoftwareSerial library
+SoftwareSerial serial(SERIAL_RX_DPIN,SERIAL_TX_DPIN);
+
+// Create an instance of the GLCD class named glcd. This instance is used to
+// call all the subsequent GLCD functions. The instance is called with a
+// reference to the software serial object.
+GLCD glcd(serial);
+
+char buffer [22]; // Character buffer for strings
 
 void publish(const char* topic, const char* msg) {
   client.publish(String(String(topic_base) + topic).c_str(), msg);
@@ -85,7 +102,7 @@ void setup() {
   Serial.println("Cat Feeder 0.1");
   Serial.println();
 
-  Serial1.begin(115200);
+  serial.begin(115200);
 
   initScreen();
 
@@ -120,59 +137,78 @@ void setup() {
   client.setCallback(callback);
 }
 
+String formatTime(unsigned long rawTime) {
+  unsigned long hours = (rawTime % 86400L) / 3600;
+  String hoursStr = hours < 10 ? "0" + String(hours) : String(hours);
+
+  unsigned long minutes = (rawTime % 3600) / 60;
+  String minuteStr = minutes < 10 ? "0" + String(minutes) : String(minutes);
+
+  unsigned long seconds = rawTime % 60;
+  String secondStr = seconds < 10 ? "0" + String(seconds) : String(seconds);
+
+  return hoursStr + ":" + minuteStr + ":" + secondStr;
+}
+
 void initScreen() {
-  Serial1.write(0x7c);
-  Serial1.write((byte)0);
+  glcd.reset();
 
-  Serial1.print("Cat Feeder 0.1");
-
+  updateTitle();
   updateTotalFed();
   updateLastFed();
 }
 
-void setX(byte posX) // 0-127 or 0-159 pixels
-{
-  // Set the X position
-  Serial1.write(0x7C);
-  Serial1.write(0x18);// CTRL x
-  Serial1.write(posX);
+void redrawScreen() {
+  glcd.clearScreen();
+
+  updateTitle();
+  updateTotalFed();
+  updateLastFed();
 }
 
-void setY(byte posY) // 0-63 or 0-127 pixels
-{
-  // Set the Y position
-  Serial1.write(0x7C);
-  Serial1.write(0x19);// CTRL y
-  Serial1.write(posY);
+void updateTitle() {
+  snprintf(buffer, sizeof(buffer), "Cat Feeder   %s", timeClient.getFormattedTime().c_str());
+  glcd.setXY(0, 0);
+  glcd.printStr(buffer);
 }
 
 void updateTotalFed() {
-  setX(0);
-  setY(52);
-  Serial1.print("Total Fed: ");
-  Serial1.print(totalFed);
-  Serial1.print("   ");
+  snprintf(buffer, sizeof(buffer), "Total Fed:   %d", totalFed);
+  glcd.setXY(0, 10);
+  glcd.printStr(buffer);
 }
 
 void updateLastFed() {
-  setX(0);
-  setY(40);
-  Serial1.print("Last Fed:  ");
+  const char* tmpl = "Last Feed:    %d%s%s ago  ";
   if (lastFed > 0) {
-    Serial1.print(lastFed);
+    unsigned long ago = timeClient.getEpochTime() - lastFed;
+    if (ago < 60 * 60 * 20) {
+      snprintf(buffer, sizeof(buffer), "Last Feed:   %s", formatTime(lastFed).c_str());
+    } else if (ago < 60 * 60 * 48) {
+      snprintf(buffer, sizeof(buffer), tmpl, ago / 60 / 60, "hr", (ago / 60 / 60 > 1 ? "s" : ""));
+    } else {
+      snprintf(buffer, sizeof(buffer), tmpl, ago / 60 / 60 / 24, "day", (ago / 60 / 60 / 24 > 1 ? "s" : ""));
+    }
   } else {
-    Serial1.print("Not Fed          ");
+    snprintf(buffer, sizeof(buffer), "Not Fed Yet");
   }
+
+  glcd.setXY(0, 20);
+  glcd.printStr(buffer);
 }
 
 void updateFeeding(boolean feeding) {
-  setX(0);
-  setY(28);
+  glcd.setXY(0, 30);
   if (feeding) {
-    Serial1.print("Feeding...");
+    glcd.printStr("Feeding...");
   } else {
-    Serial1.print("          ");
+    glcd.printStr("          ");
   }
+}
+
+void updateError() {
+  glcd.setXY(0, 30);
+  glcd.printStr("ERROR!    ");
 }
 
 void loop() {
@@ -208,10 +244,19 @@ void loop() {
     timeClient.forceUpdate();
   }
 
+  if (millis() - timeUpdated > 900) {
+    timeUpdated = millis();
+    updateTitle();
+    updateTotalFed();
+    updateLastFed();
+  }
+
   if (toFeed > 0) {
     feed(toFeed);
     toFeed = 0;
   }
+
+  delay(10);
 }
 
 void handleConnection(WiFiClient http_client) {
@@ -317,7 +362,7 @@ void handleConnection(WiFiClient http_client) {
 
 void feed(int numToFeed) {
   int numSegments = 0;
-  int prevState = HIGH;
+  int prevState = digitalRead(inputPin);
   int currState;
 
   updateFeeding(true);
@@ -330,11 +375,17 @@ void feed(int numToFeed) {
 
   digitalWrite(outputPin, HIGH);
 
+  unsigned long startTime = millis();
+
   while (true) {
     currState = digitalRead(inputPin);
-    if (currState == HIGH && prevState == LOW) {
+    if (currState == LOW && prevState == HIGH) {
       totalFed++;
       numSegments++;
+
+      if (numSegments >= numToFeed) {
+        break;
+      }
 
       updateTotalFed();
     }
@@ -349,20 +400,27 @@ void feed(int numToFeed) {
     Serial.println();
     */
 
-    if (numSegments >= numToFeed) {
-      break;
+    // if the motor has been running too long without triggering the switch, assume there is a fault
+    if (millis() - startTime > numToFeed * 1800) {
+      digitalWrite(outputPin, LOW);
+
+      updateError();
+
+      Serial.print("Error");
+
+      return;
     }
 
-    delay(10);
     prevState = currState;
+
+    delay(10);
   }
 
   digitalWrite(outputPin, LOW);
 
-  updateFeeding(false);
-
   lastFed = timeClient.getEpochTime();
-  updateLastFed();
+
+  redrawScreen();
 
   Serial.print("Fed ");
   Serial.print(numSegments);
