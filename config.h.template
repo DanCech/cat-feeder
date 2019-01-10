@@ -5,7 +5,9 @@
 #define mqtt_clientid "catfeeder1"
 #define mqtt_user     "catfeeder"
 #define mqtt_pass     "catfeeder"
-#define topic_base    "catfeeder1/"
+
+#define ha_id         "cat_feeder"
+#define ha_name       "Cat Feeder"
 
 #define inputPin  D5
 #define outputPin D6
