@@ -2,9 +2,11 @@
 #include <WiFiUdp.h>
 #include <PubSubClient.h>
 #include <NTPClient.h>
-#include "config.h"
 #include <AltSerialGraphicLCD.h>
 #include <SoftwareSerial.h>
+#include <ArduinoJson.h>
+
+#include "config.h"
 
 // Set web server port number to 80
 WiFiServer webServer(80);
@@ -12,8 +14,10 @@ WiFiServer webServer(80);
 // Variable to store the HTTP request
 String header;
 
-int totalFed = 0;
-int toFeed = 0;
+unsigned int totalFed = 0;
+unsigned int toFeed = 0;
+unsigned int feedAmount = 2;
+
 unsigned long lastFed = 0;
 unsigned long timeUpdated = 0;
 unsigned long lastScreenInit = 0;
@@ -40,10 +44,31 @@ SoftwareSerial serial(SERIAL_RX_DPIN,SERIAL_TX_DPIN);
 // reference to the software serial object.
 GLCD glcd(serial);
 
-char buffer [22]; // Character buffer for strings
+char buffer[22]; // Character buffer for strings
+
+String mqttTopic(const char* topic) {
+  return String("homeassistant/light/") + String(ha_id) + String("/") + String(topic);
+}
+
+void mqttRegister() {
+  StaticJsonBuffer<300> jsonBuffer;
+  JsonObject& root = jsonBuffer.createObject();
+
+  root["name"] = ha_name;
+  root["platform"] = "mqtt_json";
+  root["unique_id"] = ha_id;
+  root["command_topic"] = mqttTopic("set").c_str();
+  root["brightness"] = true;
+  root["state_topic"] = mqttTopic("state").c_str();
+
+  String output;
+  root.printTo(output);
+
+  mqttClient.publish(mqttTopic("config").c_str(), output.c_str());
+}
 
 void mqttPublish(const char* topic, const char* msg) {
-  mqttClient.publish(String(String(topic_base) + topic).c_str(), msg);
+  mqttClient.publish(mqttTopic("state").c_str(), msg);
 }
 
 void mqttReconnect() {
@@ -54,9 +79,9 @@ void mqttReconnect() {
     if (mqttClient.connect(mqtt_clientid, mqtt_user, mqtt_pass)) {
       Serial.println("connected");
       // Once connected, publish an announcement...
-      mqttPublish("announce", "hello world");
+      mqttRegister();
       // ... and resubscribe
-      mqttClient.subscribe(String(String(topic_base) + "command").c_str());
+      mqttClient.subscribe(mqttTopic("set").c_str());
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqttClient.state());
@@ -67,24 +92,34 @@ void mqttReconnect() {
   }
 }
 
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
+void mqttCallback(char* topic, byte* p_payload, unsigned int p_length) {
+  String payload;
+  for (uint8_t i = 0; i < p_length; i++) {
+    payload.concat((char)p_payload[i]);
+  }
+
   Serial.print("Message arrived [");
   Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
+  Serial.print("] (");
+  Serial.print(p_length);
+  Serial.print(") ");
+  Serial.print(payload);
   Serial.println();
 
   // feed cat if payload is "ON"
-  if (length == 2 && !strncmp((char *)payload, "ON", length)) {
-    digitalWrite(BUILTIN_LED, LOW);   // Turn the LED on (Note that LOW is the voltage level
-    // but actually the LED is on; this is because
-    // it is active low on the ESP-01)
-    feed(2);
-    digitalWrite(BUILTIN_LED, HIGH);
-  } else {
-    digitalWrite(BUILTIN_LED, HIGH);  // Turn the LED off by making the voltage HIGH
+  StaticJsonBuffer<300> jsonBuffer;
+  JsonObject& root = jsonBuffer.parseObject(p_payload);
+  if (!root.success()) {
+    Serial.println("ERROR: parseObject() failed");
+    return;
+  }
+
+  if (root.containsKey("brightness") && root["brightness"].is<int>()) {
+    feedAmount = (root["brightness"].as<int>() + 1) / 64;
+  }
+
+  if (root.containsKey("state") && root["state"].as<String>() == String("ON")) {
+    toFeed += feedAmount;
   }
 }
 
@@ -246,8 +281,13 @@ void loop() {
     timeClient.forceUpdate();
   }
 
+  // redraw entire screen once a minute to fix any corruption
+  if (millis() / 60000 > lastScreenInit / 60000) {
+    lastScreenInit = timeUpdated =  millis();
+    redrawScreen();
+  }
   // redraw title
-  if (millis() - timeUpdated > 900) {
+  else if (millis() / 1000 > timeUpdated / 1000) {
     timeUpdated = millis();
     updateTitle();
   }
@@ -368,7 +408,7 @@ void feed(int numToFeed) {
   Serial.print(numToFeed);
   Serial.println();
 
-  mqttPublish("state", "ON");
+  mqttPublish("state", (String("{\"state\":\"ON\",\"brightness\":") + String(numToFeed * 64) + String("}")).c_str());
 
   digitalWrite(outputPin, HIGH);
 
@@ -423,7 +463,7 @@ void feed(int numToFeed) {
   Serial.print(numSegments);
   Serial.println();
 
-  mqttPublish("state", "OFF");
+  mqttPublish("state", "{\"state\":\"OFF\"}");
 }
 
 void recvLine() {
