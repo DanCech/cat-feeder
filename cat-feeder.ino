@@ -51,20 +51,31 @@ String mqttTopic(const char* topic) {
 }
 
 void mqttRegister() {
-  StaticJsonBuffer<300> jsonBuffer;
+  StaticJsonBuffer<400> jsonBuffer;
   JsonObject& root = jsonBuffer.createObject();
 
   root["name"] = ha_name;
   root["platform"] = "mqtt_json";
   root["unique_id"] = ha_id;
-  root["command_topic"] = mqttTopic("set").c_str();
+  root["command_topic"] = mqttTopic("set");
   root["brightness"] = true;
-  root["state_topic"] = mqttTopic("state").c_str();
+  root["state_topic"] = mqttTopic("state");
 
   String output;
   root.printTo(output);
 
-  mqttClient.publish(mqttTopic("config").c_str(), output.c_str());
+  boolean result = mqttClient.beginPublish(mqttTopic("config").c_str(), output.length(), true);
+  if (result) {
+    result = mqttClient.write((unsigned char*)output.c_str(), output.length());
+  }
+  if (result) {
+    result = mqttClient.endPublish();
+  }
+  if (result) {
+    Serial.println("registered");
+  } else {
+    Serial.println("registration failed");
+  }
 }
 
 void mqttPublish(const char* topic, const char* msg) {
@@ -76,7 +87,7 @@ void mqttReconnect() {
   while (!mqttClient.connected()) {
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
-    if (mqttClient.connect(mqtt_clientid, mqtt_user, mqtt_pass)) {
+    if (mqttClient.connect(mqtt_clientid, mqtt_user, mqtt_pass, mqttTopic("config").c_str(), 1, 1, "")) {
       Serial.println("connected");
       // Once connected, publish an announcement...
       mqttRegister();
@@ -214,15 +225,15 @@ void updateTotalFed() {
 }
 
 void updateLastFed() {
-  const char* tmpl = "Last Feed:    %d%s%s ago  ";
+  const char* tmpl = "Last Feed:   %d%s ago";
   if (lastFed > 0) {
     unsigned long ago = timeClient.getEpochTime() - lastFed;
     if (ago < 60 * 60 * 20) {
       snprintf(buffer, sizeof(buffer), "Last Feed:   %s", formatTime(lastFed).c_str());
     } else if (ago < 60 * 60 * 48) {
-      snprintf(buffer, sizeof(buffer), tmpl, ago / 60 / 60, "hr", (ago / 60 / 60 > 1 ? "s" : ""));
+      snprintf(buffer, sizeof(buffer), tmpl, ago / 60 / 60, "h");
     } else {
-      snprintf(buffer, sizeof(buffer), tmpl, ago / 60 / 60 / 24, "day", (ago / 60 / 60 / 24 > 1 ? "s" : ""));
+      snprintf(buffer, sizeof(buffer), tmpl, ago / 60 / 60 / 24, "d");
     }
   } else {
     snprintf(buffer, sizeof(buffer), "Not Fed Yet");
