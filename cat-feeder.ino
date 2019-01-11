@@ -55,7 +55,7 @@ void mqttRegister() {
   JsonObject& root = jsonBuffer.createObject();
 
   root["name"] = ha_name;
-  root["platform"] = "mqtt_json";
+  root["schema"] = "json";
   root["unique_id"] = ha_id;
   root["command_topic"] = mqttTopic("set");
   root["brightness"] = true;
