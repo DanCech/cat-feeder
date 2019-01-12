@@ -437,14 +437,6 @@ void feed(int numToFeed) {
     currState = digitalRead(PIN_INPUT);
     if (currState == LOW && prevState == HIGH) {
       totalFed++;
-      File f = SPIFFS.open("/totalFed.txt", "w");
-      if (f) {
-        DEBUG_PRINT("Updating totalFed.txt: ");
-        DEBUG_PRINTLN(totalFed);
-        f.print(totalFed);
-        f.close();
-      }
-
       numSegments++;
 
       if (numSegments >= numToFeed) {
@@ -483,11 +475,20 @@ void feed(int numToFeed) {
   digitalWrite(PIN_OUTPUT, LOW);
 
   lastFed = timeClient.getEpochTime();
+
   File f = SPIFFS.open("/lastFed.txt", "w");
   if (f) {
     DEBUG_PRINT("Updating lastFed.txt: ");
     DEBUG_PRINTLN(lastFed);
     f.print(lastFed);
+    f.close();
+  }
+
+  f = SPIFFS.open("/totalFed.txt", "w");
+  if (f) {
+    DEBUG_PRINT("Updating totalFed.txt: ");
+    DEBUG_PRINTLN(totalFed);
+    f.print(totalFed);
     f.close();
   }
 
