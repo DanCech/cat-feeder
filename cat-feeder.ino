@@ -439,7 +439,8 @@ void feed(int numToFeed) {
       totalFed++;
       File f = SPIFFS.open("/totalFed.txt", "w");
       if (f) {
-        DEBUG_PRINTLN("Updating totalFed.txt");
+        DEBUG_PRINT("Updating totalFed.txt: ");
+        DEBUG_PRINTLN(totalFed);
         f.print(totalFed);
         f.close();
       }
@@ -484,7 +485,8 @@ void feed(int numToFeed) {
   lastFed = timeClient.getEpochTime();
   File f = SPIFFS.open("/lastFed.txt", "w");
   if (f) {
-    DEBUG_PRINTLN("Updating lastFed.txt");
+    DEBUG_PRINT("Updating lastFed.txt: ");
+    DEBUG_PRINTLN(lastFed);
     f.print(lastFed);
     f.close();
   }
