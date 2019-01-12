@@ -1,13 +1,15 @@
-#define wifi_ssid     "<ssid>"
-#define wifi_password "<password>"
+#define WIFI_SSID     "<ssid>"
+#define WIFI_PASSWORD "<password>"
 
-#define mqtt_server   "hassio.lan"
-#define mqtt_clientid "catfeeder1"
-#define mqtt_user     "catfeeder"
-#define mqtt_pass     "catfeeder"
+#define MQTT_SERVER   "hassio.lan"
+#define MQTT_CLIENTID "catfeeder1"
+#define MQTT_USER     "catfeeder"
+#define MQTT_PASS     "catfeeder"
 
-#define ha_id         "cat_feeder"
-#define ha_name       "Cat Feeder"
+#define HA_ID         "cat_feeder"
+#define HA_NAME       "Cat Feeder"
 
-#define inputPin  D5
-#define outputPin D6
+#define PIN_INPUT     D5
+#define PIN_OUTPUT    D6
+
+#define DEBUG_SERIAL  1

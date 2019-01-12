@@ -5,6 +5,7 @@
 #include <AltSerialGraphicLCD.h>
 #include <SoftwareSerial.h>
 #include <ArduinoJson.h>
+#include <FS.h>
 
 #include "config.h"
 
@@ -46,17 +47,82 @@ GLCD glcd(serial);
 
 char buffer[22]; // Character buffer for strings
 
+#if defined(DEBUG_TELNET)
+WiFiServer  telnetServer(23);
+WiFiClient  telnetClient;
+#define     DEBUG_PRINT(x)    telnetClient.print(x)
+#define     DEBUG_PRINTLN(x)  telnetClient.println(x)
+#elif defined(DEBUG_SERIAL)
+#define     DEBUG_PRINT(x)    Serial.print(x)
+#define     DEBUG_PRINTLN(x)  Serial.println(x)
+#else
+#define     DEBUG_PRINT(x)
+#define     DEBUG_PRINTLN(x)
+#endif
+
+///////////////////////////////////////////////////////////////////////////
+//   TELNET
+///////////////////////////////////////////////////////////////////////////
+/*
+   Function called to handle Telnet clients
+   https://www.youtube.com/watch?v=j9yW10OcahI
+*/
+#if defined(DEBUG_TELNET)
+void handleTelnet(void) {
+  if (telnetServer.hasClient()) {
+    if (!telnetClient || !telnetClient.connected()) {
+      if (telnetClient) {
+        telnetClient.stop();
+      }
+      telnetClient = telnetServer.available();
+    } else {
+      telnetServer.available().stop();
+    }
+  }
+}
+#endif
+
+///////////////////////////////////////////////////////////////////////////
+//   WiFi
+///////////////////////////////////////////////////////////////////////////
+
+/*
+   Function called to setup the connection to the WiFi AP
+*/
+void setupWiFi() {
+  DEBUG_PRINT("Connecting to ");
+  DEBUG_PRINT(WIFI_SSID);
+  DEBUG_PRINT("...");
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    DEBUG_PRINT(".");
+  }
+  DEBUG_PRINTLN("connected");
+
+  // Print local IP address
+  DEBUG_PRINT("IP address: ");
+  DEBUG_PRINTLN(WiFi.localIP());
+
+  randomSeed(micros());
+}
+
+///////////////////////////////////////////////////////////////////////////
+//   MQTT
+///////////////////////////////////////////////////////////////////////////
+
 String mqttTopic(const char* topic) {
-  return String("homeassistant/light/") + String(ha_id) + String("/") + String(topic);
+  return String("homeassistant/light/") + String(HA_ID) + String("/") + String(topic);
 }
 
 void mqttRegister() {
   StaticJsonBuffer<400> jsonBuffer;
   JsonObject& root = jsonBuffer.createObject();
 
-  root["name"] = ha_name;
+  root["name"] = HA_NAME;
   root["schema"] = "json";
-  root["unique_id"] = ha_id;
+  root["unique_id"] = HA_ID;
   root["command_topic"] = mqttTopic("set");
   root["brightness"] = true;
   root["state_topic"] = mqttTopic("state");
@@ -72,9 +138,9 @@ void mqttRegister() {
     result = mqttClient.endPublish();
   }
   if (result) {
-    Serial.println("registered");
+    DEBUG_PRINTLN("registered");
   } else {
-    Serial.println("registration failed");
+    DEBUG_PRINTLN("registration failed");
   }
 }
 
@@ -85,18 +151,18 @@ void mqttPublish(const char* topic, const char* msg) {
 void mqttReconnect() {
   // Loop until we're reconnected
   while (!mqttClient.connected()) {
-    Serial.print("Attempting MQTT connection...");
+    DEBUG_PRINT("Attempting MQTT connection...");
     // Attempt to connect
-    if (mqttClient.connect(mqtt_clientid, mqtt_user, mqtt_pass, mqttTopic("config").c_str(), 1, 1, "")) {
-      Serial.println("connected");
+    if (mqttClient.connect(MQTT_CLIENTID, MQTT_USER, MQTT_PASS, mqttTopic("config").c_str(), 1, 1, "")) {
+      DEBUG_PRINTLN("connected");
       // Once connected, publish an announcement...
       mqttRegister();
       // ... and resubscribe
       mqttClient.subscribe(mqttTopic("set").c_str());
     } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" try again in 5 seconds");
+      DEBUG_PRINT("failed, rc=");
+      DEBUG_PRINT(mqttClient.state());
+      DEBUG_PRINTLN(" try again in 5 seconds");
       // Wait 5 seconds before retrying
       delay(5000);
     }
@@ -109,19 +175,18 @@ void mqttCallback(char* topic, byte* p_payload, unsigned int p_length) {
     payload.concat((char)p_payload[i]);
   }
 
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] (");
-  Serial.print(p_length);
-  Serial.print(") ");
-  Serial.print(payload);
-  Serial.println();
+  DEBUG_PRINT("Message arrived [");
+  DEBUG_PRINT(topic);
+  DEBUG_PRINT("] (");
+  DEBUG_PRINT(p_length);
+  DEBUG_PRINT(") ");
+  DEBUG_PRINTLN(payload);
 
   // feed cat if payload is "ON"
   StaticJsonBuffer<300> jsonBuffer;
   JsonObject& root = jsonBuffer.parseObject(p_payload);
   if (!root.success()) {
-    Serial.println("ERROR: parseObject() failed");
+    DEBUG_PRINTLN("ERROR: parseObject() failed");
     return;
   }
 
@@ -134,54 +199,9 @@ void mqttCallback(char* topic, byte* p_payload, unsigned int p_length) {
   }
 }
 
-void setup() {
-  // put your setup code here, to run once:
-  pinMode(inputPin, INPUT_PULLUP); // enable internal pullup
-
-  pinMode(outputPin, OUTPUT);
-  digitalWrite(outputPin, LOW);
-
-  delay(100);
-
-  Serial.begin(74880);
-
-  Serial.println("Cat Feeder 0.1");
-  Serial.println();
-
-  serial.begin(115200);
-
-  initScreen();
-
-  // Connect to Wi-Fi network with SSID and password
-  Serial.print("Connecting to ");
-  Serial.print(wifi_ssid);
-  Serial.print("...");
-
-  WiFi.begin(wifi_ssid, wifi_password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("connected");
-
-  // Print local IP address
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-
-  // Initialize a NTPClient to get time
-  timeClient.begin();
-  // Set offset time in seconds to adjust for your timezone, for example:
-  // GMT +1 = 3600
-  // GMT +8 = 28800
-  // GMT -1 = -3600
-  // GMT 0 = 0
-  timeClient.setTimeOffset(-5 * 3600);
-
-  webServer.begin();
-
-  mqttClient.setServer(mqtt_server, 1883);
-  mqttClient.setCallback(mqttCallback);
-}
+///////////////////////////////////////////////////////////////////////////
+//   LCD
+///////////////////////////////////////////////////////////////////////////
 
 String formatTime(unsigned long rawTime) {
   unsigned long hours = (rawTime % 86400L) / 3600;
@@ -197,11 +217,12 @@ String formatTime(unsigned long rawTime) {
 }
 
 void initScreen() {
+  serial.begin(115200);
+
   glcd.reset();
 
   updateTitle();
-  updateTotalFed();
-  updateLastFed();
+  updateLine2("Starting...");
 }
 
 void redrawScreen() {
@@ -218,6 +239,12 @@ void updateTitle() {
   glcd.printStr(buffer);
 }
 
+void updateLine2(const char* content) {
+  snprintf(buffer, sizeof(buffer), "%s", content);
+  glcd.setXY(0, 10);
+  glcd.printStr(buffer);
+}
+
 void updateTotalFed() {
   snprintf(buffer, sizeof(buffer), "Total Fed:   %d", totalFed);
   glcd.setXY(0, 10);
@@ -225,18 +252,18 @@ void updateTotalFed() {
 }
 
 void updateLastFed() {
-  const char* tmpl = "Last Feed:   %d%s ago";
+  const char* tmpl = "Last Feed:   %d%s ago    ";
   if (lastFed > 0) {
     unsigned long ago = timeClient.getEpochTime() - lastFed;
     if (ago < 60 * 60 * 20) {
-      snprintf(buffer, sizeof(buffer), "Last Feed:   %s", formatTime(lastFed).c_str());
+      snprintf(buffer, sizeof(buffer), "Last Feed:   %s    ", formatTime(lastFed).c_str());
     } else if (ago < 60 * 60 * 48) {
       snprintf(buffer, sizeof(buffer), tmpl, ago / 60 / 60, "h");
     } else {
       snprintf(buffer, sizeof(buffer), tmpl, ago / 60 / 60 / 24, "d");
     }
   } else {
-    snprintf(buffer, sizeof(buffer), "Not Fed Yet");
+    snprintf(buffer, sizeof(buffer), "Not Fed Yet            ");
   }
 
   glcd.setXY(0, 20);
@@ -257,60 +284,9 @@ void updateError() {
   glcd.printStr("ERROR!    ");
 }
 
-void loop() {
-  // Handle web requests
-  WiFiClient http_client = webServer.available();
-  if (http_client) {
-    handleConnection(http_client);
-  }
-
-  /*
-  // Handle serial data
-  recvLine();
-  if (newData) {
-    toFeed = String(receivedChars).toInt();
-    if (toFeed == 0) {
-      Serial.print("Ignoring invalid input ");
-      Serial.print(receivedChars);
-      Serial.println();
-    }
-    newData = false;
-    Serial.print("total fed ");
-    Serial.print(totalFed);
-    Serial.println();
-  }
-  */
-
-  // handle mqtt requests
-  if (!mqttClient.connected()) {
-    mqttReconnect();
-  }
-  mqttClient.loop();
-
-  // update time
-  while(!timeClient.update()) {
-    timeClient.forceUpdate();
-  }
-
-  // redraw entire screen once a minute to fix any corruption
-  if (millis() / 60000 > lastScreenInit / 60000) {
-    lastScreenInit = timeUpdated =  millis();
-    redrawScreen();
-  }
-  // redraw title
-  else if (millis() / 1000 > timeUpdated / 1000) {
-    timeUpdated = millis();
-    updateTitle();
-  }
-
-  // feed cat
-  if (toFeed > 0) {
-    feed(toFeed);
-    toFeed = 0;
-  }
-
-  delay(10);
-}
+///////////////////////////////////////////////////////////////////////////
+//   HTTP
+///////////////////////////////////////////////////////////////////////////
 
 void sendPageHeader(WiFiClient http_client) {
   // Display the HTML web page
@@ -350,7 +326,7 @@ void handleConnection(WiFiClient http_client) {
         if (currentLine.length() == 0) {
           // turns the GPIOs on and off
           if (header.indexOf("GET /feed") >= 0) {
-            Serial.println("Requested Feed");
+            DEBUG_PRINTLN("Requested Feed");
             toFeed++;
 
             // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
@@ -364,6 +340,35 @@ void handleConnection(WiFiClient http_client) {
             sendPageHeader(http_client);
 
             http_client.println("<p>Feeding</p>");
+
+            sendPageFooter(http_client);
+
+            // Break out of the while loop
+            break;
+          }
+
+          if (header.indexOf("GET /reset") >= 0) {
+            DEBUG_PRINTLN("Requested Reset");
+
+            lastFed = 0;
+            SPIFFS.remove("/lastFed.txt");
+            updateLastFed();
+
+            totalFed = 0;
+            SPIFFS.remove("/totalFed.txt");
+            updateTotalFed();
+
+            // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
+            // and a content-type so the client knows what's coming, then a blank line:
+            http_client.println("HTTP/1.1 302 Redirect");
+            http_client.println("Location: /");
+            http_client.println("Content-type: text/html");
+            http_client.println("Connection: close");
+            http_client.println();
+
+            sendPageHeader(http_client);
+
+            http_client.println("<p>Reset</p>");
 
             sendPageFooter(http_client);
 
@@ -408,27 +413,37 @@ void handleConnection(WiFiClient http_client) {
   // Serial.println("");
 }
 
+///////////////////////////////////////////////////////////////////////////
+//   Feeder
+///////////////////////////////////////////////////////////////////////////
+
 void feed(int numToFeed) {
   int numSegments = 0;
-  int prevState = digitalRead(inputPin);
+  int prevState = digitalRead(PIN_INPUT);
   int currState;
 
   updateFeeding(true);
 
-  Serial.print("Feeding ");
-  Serial.print(numToFeed);
-  Serial.println();
+  DEBUG_PRINT("Feeding ");
+  DEBUG_PRINTLN(numToFeed);
 
   mqttPublish("state", (String("{\"state\":\"ON\",\"brightness\":") + String(numToFeed * 64) + String("}")).c_str());
 
-  digitalWrite(outputPin, HIGH);
+  digitalWrite(PIN_OUTPUT, HIGH);
 
   unsigned long startTime = millis();
 
   while (true) {
-    currState = digitalRead(inputPin);
+    currState = digitalRead(PIN_INPUT);
     if (currState == LOW && prevState == HIGH) {
       totalFed++;
+      File f = SPIFFS.open("/totalFed.txt", "w");
+      if (f) {
+        DEBUG_PRINTLN("Updating totalFed.txt");
+        f.print(totalFed);
+        f.close();
+      }
+
       numSegments++;
 
       if (numSegments >= numToFeed) {
@@ -450,11 +465,11 @@ void feed(int numToFeed) {
 
     // if the motor has been running too long without triggering the switch, assume there is a fault
     if (millis() - startTime > numToFeed * 1800) {
-      digitalWrite(outputPin, LOW);
+      digitalWrite(PIN_OUTPUT, LOW);
 
       updateError();
 
-      Serial.print("Error");
+      DEBUG_PRINTLN("Error");
 
       return;
     }
@@ -464,38 +479,160 @@ void feed(int numToFeed) {
     delay(10);
   }
 
-  digitalWrite(outputPin, LOW);
+  digitalWrite(PIN_OUTPUT, LOW);
 
   lastFed = timeClient.getEpochTime();
+  File f = SPIFFS.open("/lastFed.txt", "w");
+  if (f) {
+    DEBUG_PRINTLN("Updating lastFed.txt");
+    f.print(lastFed);
+    f.close();
+  }
 
   redrawScreen();
 
-  Serial.print("Fed ");
-  Serial.print(numSegments);
-  Serial.println();
+  DEBUG_PRINT("Fed ");
+  DEBUG_PRINTLN(numSegments);
 
   mqttPublish("state", "{\"state\":\"OFF\"}");
 }
 
-void recvLine() {
- static byte ndx = 0;
- char endMarker = '\n';
- char rc;
+///////////////////////////////////////////////////////////////////////////
+//   Setup
+///////////////////////////////////////////////////////////////////////////
 
- // if (Serial.available() > 0) {
- while (Serial.available() > 0 && newData == false) {
-   rc = Serial.read();
+void setup() {
+  pinMode(PIN_INPUT, INPUT_PULLUP); // enable internal pullup
 
-   if (rc != endMarker) {
-     receivedChars[ndx] = rc;
-     ndx++;
-     if (ndx >= numChars) {
-       ndx = numChars - 1;
-     }
-   } else {
-     receivedChars[ndx] = '\0'; // terminate the string
-     ndx = 0;
-     newData = true;
-   }
- }
+  pinMode(PIN_OUTPUT, OUTPUT);
+  digitalWrite(PIN_OUTPUT, LOW);
+
+  delay(100);
+
+  Serial.begin(74880);
+
+#if defined(DEBUG_TELNET)
+  telnetServer.begin();
+  telnetServer.setNoDelay(true);
+#endif
+
+  DEBUG_PRINTLN("Cat Feeder 0.1");
+  DEBUG_PRINTLN();
+
+  initScreen();
+
+  yield();
+
+  setupWiFi();
+
+  yield();
+
+  // Initialize a NTPClient to get time
+  timeClient.begin();
+  // Set offset time in seconds to adjust for your timezone, for example:
+  // GMT +1 = 3600
+  // GMT +8 = 28800
+  // GMT -1 = -3600
+  // GMT 0 = 0
+  timeClient.setTimeOffset(-5 * 3600);
+
+  // update time
+  while(!timeClient.update()) {
+    yield();
+    timeClient.forceUpdate();
+  }
+
+  yield();
+
+  webServer.begin();
+
+  yield();
+
+  mqttClient.setServer(MQTT_SERVER, 1883);
+  mqttClient.setCallback(mqttCallback);
+
+  yield();
+
+  SPIFFS.begin();
+
+  yield();
+
+  File f;
+
+  f = SPIFFS.open("/lastFed.txt", "r");
+  if (f) {
+    DEBUG_PRINT("Reading lastFed.txt: ");
+    lastFed = (unsigned long)f.parseFloat();
+    f.close();
+    DEBUG_PRINTLN(lastFed);
+  }
+
+  yield();
+
+  f = SPIFFS.open("/totalFed.txt", "r");
+  if (f) {
+    DEBUG_PRINT("Reading totalFed.txt: ");
+    totalFed = (unsigned int)f.parseInt();
+    f.close();
+    DEBUG_PRINTLN(totalFed);
+  }
+
+  yield();
+
+  redrawScreen();
 }
+
+///////////////////////////////////////////////////////////////////////////
+//   Loop
+///////////////////////////////////////////////////////////////////////////
+
+void loop() {
+  // Handle web requests
+  WiFiClient http_client = webServer.available();
+  if (http_client) {
+    handleConnection(http_client);
+  }
+
+  yield();
+
+  // handle mqtt
+  if (!mqttClient.connected()) {
+    mqttReconnect();
+  }
+
+  yield();
+
+  mqttClient.loop();
+
+  yield();
+
+  // update time
+  while(!timeClient.update()) {
+    yield();
+    timeClient.forceUpdate();
+  }
+
+  yield();
+
+  // redraw entire screen once a minute to fix any corruption
+  if (millis() / 60000 > lastScreenInit / 60000) {
+    lastScreenInit = timeUpdated =  millis();
+    redrawScreen();
+  }
+  // redraw title
+  else if (millis() / 1000 > timeUpdated / 1000) {
+    timeUpdated = millis();
+    updateTitle();
+  }
+
+  yield();
+
+  // feed cat
+  if (toFeed > 0) {
+    feed(toFeed);
+    toFeed = 0;
+  }
+
+  delay(10);
+}
+
