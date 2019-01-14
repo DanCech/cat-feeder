@@ -6,6 +6,7 @@
 #include <SoftwareSerial.h>
 #include <ArduinoJson.h>
 #include <FS.h>
+#include <ArduinoOTA.h>
 
 #include "config.h"
 
@@ -90,10 +91,13 @@ void handleTelnet(void) {
    Function called to setup the connection to the WiFi AP
 */
 void setupWiFi() {
+  updateLine2("WiFi Connecting...    ");
+
   DEBUG_PRINT("Connecting to ");
   DEBUG_PRINT(WIFI_SSID);
   DEBUG_PRINT("...");
 
+  WiFi.hostname(HA_ID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -104,6 +108,8 @@ void setupWiFi() {
   // Print local IP address
   DEBUG_PRINT("IP address: ");
   DEBUG_PRINTLN(WiFi.localIP());
+
+  updateLine2("WiFi Connected        ");
 
   randomSeed(micros());
 }
@@ -200,6 +206,66 @@ void mqttCallback(char* topic, byte* p_payload, unsigned int p_length) {
 }
 
 ///////////////////////////////////////////////////////////////////////////
+//   OTA
+///////////////////////////////////////////////////////////////////////////
+#if defined(OTA)
+/*
+   Function called to setup OTA updates
+*/
+void setupOTA() {
+  ArduinoOTA.setHostname(HA_ID);
+  DEBUG_PRINT(F("INFO: OTA hostname sets to: "));
+  DEBUG_PRINTLN(HA_ID);
+
+#if defined(OTA_PORT)
+  ArduinoOTA.setPort(OTA_PORT);
+  DEBUG_PRINT(F("INFO: OTA port sets to: "));
+  DEBUG_PRINTLN(OTA_PORT);
+#endif
+
+#if defined(OTA_PASSWORD)
+  ArduinoOTA.setPassword((const char *)OTA_PASSWORD);
+  DEBUG_PRINT(F("INFO: OTA password sets to: "));
+  DEBUG_PRINTLN(OTA_PASSWORD);
+#endif
+
+  ArduinoOTA.onStart([]() {
+    DEBUG_PRINTLN(F("INFO: OTA starts"));
+  });
+  ArduinoOTA.onEnd([]() {
+    DEBUG_PRINTLN(F("INFO: OTA ends"));
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    DEBUG_PRINT(F("INFO: OTA progresses: "));
+    DEBUG_PRINT(progress / (total / 100));
+    DEBUG_PRINTLN(F("%"));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    DEBUG_PRINT(F("ERROR: OTA error: "));
+    DEBUG_PRINTLN(error);
+    if (error == OTA_AUTH_ERROR)
+      DEBUG_PRINTLN(F("ERROR: OTA auth failed"));
+    else if (error == OTA_BEGIN_ERROR)
+      DEBUG_PRINTLN(F("ERROR: OTA begin failed"));
+    else if (error == OTA_CONNECT_ERROR)
+      DEBUG_PRINTLN(F("ERROR: OTA connect failed"));
+    else if (error == OTA_RECEIVE_ERROR)
+      DEBUG_PRINTLN(F("ERROR: OTA receive failed"));
+    else if (error == OTA_END_ERROR)
+      DEBUG_PRINTLN(F("ERROR: OTA end failed"));
+  });
+  ArduinoOTA.begin();
+}
+
+/*
+   Function called to handle OTA updates
+*/
+void handleOTA() {
+  ArduinoOTA.handle();
+}
+#endif
+
+///////////////////////////////////////////////////////////////////////////
 //   LCD
 ///////////////////////////////////////////////////////////////////////////
 
@@ -216,26 +282,34 @@ String formatTime(unsigned long rawTime) {
   return hoursStr + ":" + minuteStr + ":" + secondStr;
 }
 
-void initScreen() {
+void initScreen(const char* msg) {
   serial.begin(115200);
 
   glcd.reset();
 
   updateTitle();
-  updateLine2("Starting...");
+  updateLine2(msg);
 }
 
 void redrawScreen() {
   glcd.clearScreen();
 
   updateTitle();
+  updateTime();
   updateTotalFed();
   updateLastFed();
 }
 
 void updateTitle() {
-  snprintf(buffer, sizeof(buffer), "Cat Feeder   %s", timeClient.getFormattedTime().c_str());
-  glcd.setXY(0, 0);
+  glcd.setString(64, 0, GLCD_FONT_CENTER, HA_NAME);
+  // snprintf(buffer, sizeof(buffer), "%s", HA_NAME);
+  // glcd.setXY(0, 0);
+  // glcd.printStr(buffer);
+}
+
+void updateTime() {
+  snprintf(buffer, sizeof(buffer), "Time:        %s", timeClient.getFormattedTime().c_str());
+  glcd.setXY(0, 10);
   glcd.printStr(buffer);
 }
 
@@ -245,18 +319,12 @@ void updateLine2(const char* content) {
   glcd.printStr(buffer);
 }
 
-void updateTotalFed() {
-  snprintf(buffer, sizeof(buffer), "Total Fed:   %d", totalFed);
-  glcd.setXY(0, 10);
-  glcd.printStr(buffer);
-}
-
 void updateLastFed() {
-  const char* tmpl = "Last Feed:   %d%s ago    ";
+  const char* tmpl = "Last Fed:    %d%s ago    ";
   if (lastFed > 0) {
     unsigned long ago = timeClient.getEpochTime() - lastFed;
     if (ago < 60 * 60 * 20) {
-      snprintf(buffer, sizeof(buffer), "Last Feed:   %s    ", formatTime(lastFed).c_str());
+      snprintf(buffer, sizeof(buffer), "Last Fed:    %s    ", formatTime(lastFed).c_str());
     } else if (ago < 60 * 60 * 48) {
       snprintf(buffer, sizeof(buffer), tmpl, ago / 60 / 60, "h");
     } else {
@@ -270,8 +338,14 @@ void updateLastFed() {
   glcd.printStr(buffer);
 }
 
-void updateFeeding(boolean feeding) {
+void updateTotalFed() {
+  snprintf(buffer, sizeof(buffer), "Total Fed:   %d", totalFed);
   glcd.setXY(0, 30);
+  glcd.printStr(buffer);
+}
+
+void updateFeeding(boolean feeding) {
+  glcd.setXY(0, 40);
   if (feeding) {
     glcd.printStr("Feeding...");
   } else {
@@ -280,7 +354,7 @@ void updateFeeding(boolean feeding) {
 }
 
 void updateError() {
-  glcd.setXY(0, 30);
+  glcd.setXY(0, 40);
   glcd.printStr("ERROR!    ");
 }
 
@@ -522,11 +596,15 @@ void setup() {
   DEBUG_PRINTLN("Cat Feeder 0.1");
   DEBUG_PRINTLN();
 
-  initScreen();
+  initScreen("Starting...");
 
   yield();
 
   setupWiFi();
+
+#if defined(OTA)
+  setupOTA();
+#endif
 
   yield();
 
@@ -590,6 +668,10 @@ void setup() {
 ///////////////////////////////////////////////////////////////////////////
 
 void loop() {
+#if defined(OTA)
+  handleOTA();
+#endif
+
   // Handle web requests
   WiFiClient http_client = webServer.available();
   if (http_client) {
@@ -617,15 +699,15 @@ void loop() {
 
   yield();
 
-  // redraw entire screen once a minute to fix any corruption
-  if (millis() / 60000 > lastScreenInit / 60000) {
+  // redraw entire screen every 10s to fix any corruption
+  if (millis() / 10000 > lastScreenInit / 10000) {
     lastScreenInit = timeUpdated =  millis();
     redrawScreen();
   }
   // redraw title
   else if (millis() / 1000 > timeUpdated / 1000) {
     timeUpdated = millis();
-    updateTitle();
+    updateTime();
   }
 
   yield();

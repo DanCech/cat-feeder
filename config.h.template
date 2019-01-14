@@ -1,15 +1,26 @@
+// System
+#define HA_ID         "cat_feeder"
+#define HA_NAME       "Cat Feeder"
+
+// WiFi
 #define WIFI_SSID     "<ssid>"
 #define WIFI_PASSWORD "<password>"
 
+// MQTT
 #define MQTT_SERVER   "hassio.lan"
 #define MQTT_CLIENTID "catfeeder1"
 #define MQTT_USER     "catfeeder"
 #define MQTT_PASS     "catfeeder"
 
-#define HA_ID         "cat_feeder"
-#define HA_NAME       "Cat Feeder"
-
+// Pins
 #define PIN_INPUT     D5
 #define PIN_OUTPUT    D6
 
-#define DEBUG_SERIAL  1
+// DEBUG
+#define DEBUG_TELNET
+//#define DEBUG_SERIAL
+
+// OTA
+#define OTA
+#define OTA_PASSWORD  "catfeeder"  // no password by default
+//#define OTA_PORT      8266        // port 8266 by default
