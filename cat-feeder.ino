@@ -21,8 +21,7 @@ unsigned int toFeed = 0;
 unsigned int feedAmount = 2;
 
 unsigned long lastFed = 0;
-unsigned long timeUpdated = 0;
-unsigned long lastScreenInit = 0;
+unsigned long lastScreenUpdate = 0;
 
 const byte numChars = 32;
 char receivedChars[numChars]; // an array to store the received data
@@ -59,6 +58,11 @@ WiFiClient  telnetClient;
 #else
 #define     DEBUG_PRINT(x)
 #define     DEBUG_PRINTLN(x)
+#endif
+
+#if defined(GRAPHITE)
+WiFiUDP graphiteUDP;
+unsigned long lastGraphiteUpdate = 0;
 #endif
 
 ///////////////////////////////////////////////////////////////////////////
@@ -270,13 +274,15 @@ void handleOTA() {
 ///////////////////////////////////////////////////////////////////////////
 
 String formatTime(unsigned long rawTime) {
-  unsigned long hours = (rawTime % 86400L) / 3600;
+  unsigned long localTime = rawTime + (TZ_OFFSET * 3600);
+
+  unsigned long hours = (localTime % 86400L) / 3600;
   String hoursStr = hours < 10 ? "0" + String(hours) : String(hours);
 
-  unsigned long minutes = (rawTime % 3600) / 60;
+  unsigned long minutes = (localTime % 3600) / 60;
   String minuteStr = minutes < 10 ? "0" + String(minutes) : String(minutes);
 
-  unsigned long seconds = rawTime % 60;
+  unsigned long seconds = localTime % 60;
   String secondStr = seconds < 10 ? "0" + String(seconds) : String(seconds);
 
   return hoursStr + ":" + minuteStr + ":" + secondStr;
@@ -308,7 +314,7 @@ void updateTitle() {
 }
 
 void updateTime() {
-  snprintf(buffer, sizeof(buffer), "Time:        %s", timeClient.getFormattedTime().c_str());
+  snprintf(buffer, sizeof(buffer), "Time:        %s", formatTime(timeClient.getEpochTime()).c_str());
   glcd.setXY(0, 10);
   glcd.printStr(buffer);
 }
@@ -399,7 +405,7 @@ void handleConnection(WiFiClient http_client) {
         // that's the end of the client HTTP request, so send a response:
         if (currentLine.length() == 0) {
           // turns the GPIOs on and off
-          if (header.indexOf("GET /feed") >= 0) {
+          if (header.indexOf("GET /feed ") >= 0) {
             DEBUG_PRINTLN("Requested Feed");
             toFeed++;
 
@@ -421,7 +427,7 @@ void handleConnection(WiFiClient http_client) {
             break;
           }
 
-          if (header.indexOf("GET /reset") >= 0) {
+          if (header.indexOf("GET /reset ") >= 0) {
             DEBUG_PRINTLN("Requested Reset");
 
             lastFed = 0;
@@ -445,6 +451,28 @@ void handleConnection(WiFiClient http_client) {
             http_client.println("<p>Reset</p>");
 
             sendPageFooter(http_client);
+
+            // Break out of the while loop
+            break;
+          }
+
+          if (header.indexOf("GET /metrics ") >= 0) {
+            DEBUG_PRINTLN("Requested Metrics");
+
+            // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
+            // and a content-type so the client knows what's coming, then a blank line:
+            http_client.println("HTTP/1.1 200 OK");
+            http_client.println("Content-type: text/plain; version=0.0.4");
+            http_client.println("Connection: close");
+            http_client.println();
+
+            char mbuffer[100];
+
+            snprintf(mbuffer, sizeof(mbuffer), "cat_feeder_total_fed{name=\"%s\"} %d", HA_ID, totalFed);
+            http_client.println(mbuffer);
+
+            snprintf(mbuffer, sizeof(mbuffer), "cat_feeder_last_fed{name=\"%s\"} %d", HA_ID, lastFed);
+            http_client.println(mbuffer);
 
             // Break out of the while loop
             break;
@@ -610,12 +638,6 @@ void setup() {
 
   // Initialize a NTPClient to get time
   timeClient.begin();
-  // Set offset time in seconds to adjust for your timezone, for example:
-  // GMT +1 = 3600
-  // GMT +8 = 28800
-  // GMT -1 = -3600
-  // GMT 0 = 0
-  timeClient.setTimeOffset(-5 * 3600);
 
   // update time
   while(!timeClient.update()) {
@@ -670,6 +692,13 @@ void setup() {
 void loop() {
 #if defined(OTA)
   handleOTA();
+  yield();
+#endif
+
+#if defined(DEBUG_TELNET)
+  // handle the Telnet connection
+  handleTelnet();
+  yield();
 #endif
 
   // Handle web requests
@@ -699,18 +728,27 @@ void loop() {
 
   yield();
 
-  // redraw entire screen every 10s to fix any corruption
-  if (millis() / 10000 > lastScreenInit / 10000) {
-    lastScreenInit = timeUpdated =  millis();
+  // update screen
+  if (millis() / 1000 > lastScreenUpdate / 1000) {
+    lastScreenUpdate =  millis();
     redrawScreen();
-  }
-  // redraw title
-  else if (millis() / 1000 > timeUpdated / 1000) {
-    timeUpdated = millis();
-    updateTime();
   }
 
   yield();
+
+#if defined(GRAPHITE)
+  unsigned long currTime = timeClient.getEpochTime();
+  if (currTime / GRAPHITE_INTERVAL > lastGraphiteUpdate / GRAPHITE_INTERVAL) {
+    graphiteUDP.beginPacket(GRAPHITE_HOST, GRAPHITE_PORT);
+    char msgBuffer[100];
+    snprintf(msgBuffer, sizeof(msgBuffer), "%s.%s.%s %d %d\n", GRAPHITE_PREFIX, HA_ID, "total_fed", totalFed, currTime);
+    graphiteUDP.write(msgBuffer);
+    snprintf(msgBuffer, sizeof(msgBuffer), "%s.%s.%s %d %d\n", GRAPHITE_PREFIX, HA_ID, "last_fed", lastFed, currTime);
+    graphiteUDP.write(msgBuffer);
+    graphiteUDP.endPacket();
+    lastGraphiteUpdate = currTime;
+  }
+#endif
 
   // feed cat
   if (toFeed > 0) {
