@@ -2,12 +2,14 @@
 #define HA_ID         "cat_feeder"
 #define HA_NAME       "Cat Feeder"
 
+#define TZ_OFFSET     -5
+
 // WiFi
 #define WIFI_SSID     "<ssid>"
 #define WIFI_PASSWORD "<password>"
 
 // MQTT
-#define MQTT_SERVER   "hassio.lan"
+#define MQTT_SERVER   "mqtt.lan"
 #define MQTT_CLIENTID "catfeeder1"
 #define MQTT_USER     "catfeeder"
 #define MQTT_PASS     "catfeeder"
@@ -24,3 +26,14 @@
 #define OTA
 #define OTA_PASSWORD  "catfeeder"  // no password by default
 //#define OTA_PORT      8266        // port 8266 by default
+
+// Graphite
+#define GRAPHITE
+#define GRAPHITE_HOST     "graphite.lan"
+#define GRAPHITE_PORT     2003
+#define GRAPHITE_PREFIX   "ha.light"
+#define GRAPHITE_INTERVAL 60
+
+// Hosted Metrics
+#define HM_HOST "graphite-us-central1.grafana.net"
+#define HM_AUTH "<base64-encode(instanceId:apiKey)>"

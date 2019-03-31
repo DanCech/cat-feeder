@@ -7,6 +7,7 @@
 #include <ArduinoJson.h>
 #include <FS.h>
 #include <ArduinoOTA.h>
+// #include <WiFiClientSecure.h>
 
 #include "config.h"
 
@@ -101,6 +102,7 @@ void setupWiFi() {
   DEBUG_PRINT(WIFI_SSID);
   DEBUG_PRINT("...");
 
+  WiFi.mode(WIFI_STA);
   WiFi.hostname(HA_ID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
@@ -160,7 +162,7 @@ void mqttPublish(const char* topic, const char* msg) {
 
 void mqttReconnect() {
   // Loop until we're reconnected
-  while (!mqttClient.connected()) {
+  if (!mqttClient.connected()) {
     DEBUG_PRINT("Attempting MQTT connection...");
     // Attempt to connect
     if (mqttClient.connect(MQTT_CLIENTID, MQTT_USER, MQTT_PASS, mqttTopic("config").c_str(), 1, 1, "")) {
@@ -172,9 +174,6 @@ void mqttReconnect() {
     } else {
       DEBUG_PRINT("failed, rc=");
       DEBUG_PRINT(mqttClient.state());
-      DEBUG_PRINTLN(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
     }
   }
 }
@@ -515,6 +514,59 @@ void handleConnection(WiFiClient http_client) {
   // Serial.println("");
 }
 
+//   Hosted Metrics
+
+void submitMetrics(unsigned int ts) {
+  // Use WiFiClientSecure class to create TLS connection
+  WiFiClient client;
+  DEBUG_PRINT("connecting to ");
+  DEBUG_PRINTLN(HM_HOST);
+
+  // Serial.printf("Using fingerprint '%s'\n", fingerprint);
+  // client.setFingerprint(fingerprint);
+
+  if (!client.connect(HM_HOST, 80)) {
+    DEBUG_PRINTLN("connection failed");
+    return;
+  }
+
+  String url = "/metrics";
+  DEBUG_PRINT("requesting URL: ");
+  DEBUG_PRINTLN(url);
+
+  String body = String("[") +
+  "{\"name\":\"" + GRAPHITE_PREFIX + "." + HA_ID + ".total_fed\",\"interval\":" + GRAPHITE_INTERVAL + ",\"value\":" + totalFed + ",\"mtype\":\"counter\",\"time\":" + ts + "}" +
+  "," +
+  "{\"name\":\"" + GRAPHITE_PREFIX + "." + HA_ID + ".last_fed\",\"interval\":" + GRAPHITE_INTERVAL + ",\"value\":" + lastFed + ",\"mtype\":\"timestamp\",\"time\":" + ts + "}" +
+  "]";
+
+  String request = String("POST ") + url + " HTTP/1.1\r\n" +
+               "Host: " + HM_HOST + "\r\n" +
+               "Authorization: Basic " + HM_AUTH + "\r\n" +
+               "User-Agent: CatFeeder\r\n" +
+               "Content-Type: application/json\r\n" +
+               "Content-Length: " + body.length() + "\r\n" +
+               "Connection: close\r\n\r\n" +
+               body;
+
+  DEBUG_PRINTLN(request);
+  DEBUG_PRINTLN();
+  client.print(request);
+
+  DEBUG_PRINTLN("request sent");
+  DEBUG_PRINTLN();
+
+  while (client.connected() || client.available()) {
+    if (client.available()) {
+      String line = client.readStringUntil('\n');
+      DEBUG_PRINTLN(line);
+    }
+    yield();
+  }
+  client.stop();
+  DEBUG_PRINTLN("closing connection");
+}
+
 ///////////////////////////////////////////////////////////////////////////
 //   Feeder
 ///////////////////////////////////////////////////////////////////////////
@@ -529,7 +581,7 @@ void feed(int numToFeed) {
   DEBUG_PRINT("Feeding ");
   DEBUG_PRINTLN(numToFeed);
 
-  mqttPublish("state", (String("{\"state\":\"ON\",\"brightness\":") + String(numToFeed * 64) + String("}")).c_str());
+  mqttPublish("state", (String("{\"state\":\"ON\",\"brightness\":") + (numToFeed * 64) + "}").c_str());
 
   digitalWrite(PIN_OUTPUT, HIGH);
 
@@ -640,7 +692,7 @@ void setup() {
   timeClient.begin();
 
   // update time
-  while(!timeClient.update()) {
+  if (!timeClient.update()) {
     yield();
     timeClient.forceUpdate();
   }
@@ -716,12 +768,14 @@ void loop() {
 
   yield();
 
-  mqttClient.loop();
+  if (mqttClient.connected()) {
+    mqttClient.loop();
+  }
 
   yield();
 
   // update time
-  while(!timeClient.update()) {
+  if (!timeClient.update()) {
     yield();
     timeClient.forceUpdate();
   }
@@ -746,6 +800,11 @@ void loop() {
     snprintf(msgBuffer, sizeof(msgBuffer), "%s.%s.%s %d %d\n", GRAPHITE_PREFIX, HA_ID, "last_fed", lastFed, currTime);
     graphiteUDP.write(msgBuffer);
     graphiteUDP.endPacket();
+
+    yield();
+
+    submitMetrics(currTime - currTime % GRAPHITE_INTERVAL);
+
     lastGraphiteUpdate = currTime;
   }
 #endif
